@@ -815,6 +815,22 @@ static void mt_gpu_volt_switch(unsigned int volt_old, unsigned int volt_new)
 	if (volt_new == g_cur_gpu_volt)
 		return;
 
+	/*
+	 * volt_new == 0 happens when this is called (e.g. from the PTPOD
+	 * PTP_CTRL_GPU voltage-compensation thread) before mt_gpufreqs[] has
+	 * been populated by mt_gpufreq_pdrv_probe()'s mt_setup_gpufreqs_table()
+	 * - the array is kzalloc'd, so an as-yet-unfilled entry's gpufreq_volt
+	 * reads as 0. regulator_set_voltage() already rejects this safely
+	 * (min > max after clamping) and we no-op afterwards without
+	 * corrupting g_cur_gpu_volt, but there's no reason to ask the
+	 * regulator framework to validate a value we already know is bogus.
+	 */
+	if (volt_new == 0) {
+		pr_err("mt_gpu_volt_switch: ignoring bogus request for 0mV (%d -> %d), gpufreq table not ready yet\n",
+			volt_old, volt_new);
+		return;
+	}
+
 	ret = regulator_set_voltage(g_reg_vgpu,
 			GPU_VOLT_TO_EXTBUCK_VAL(volt_new), GPU_VOLT_TO_EXTBUCK_MAXVAL(volt_new));
 	if (ret != 0) {
