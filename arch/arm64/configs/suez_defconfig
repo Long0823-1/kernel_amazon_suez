@@ -488,6 +488,21 @@ CONFIG_PM_AUTOSLEEP=y
 CONFIG_PM_RUNTIME=y
 CONFIG_PM_WAKELOCKS_LIMIT=0
 CONFIG_PM_WAKELOCKS=y
+# suez: unexplained freeze/hang reboots (bootreason=wdt_by_pass_pwk) tracked
+# down via logcat boundary analysis to a device suspend/resume callback that
+# never returns (freeze occurs ~2min after boot, right at/around the first
+# PM suspend entry/exit; the device then sits hung with no panic for ~90min
+# until something eventually force-resets it). Nothing currently detects a
+# stuck .suspend()/.resume(), so it's invisible which driver is at fault.
+# DPM_WATCHDOG arms a per-device timer around each suspend/resume callback
+# and panics with the offending device's name if it doesn't return in time --
+# panic() output lands in the pstore console-ramoops dump (already fixed to
+# have correct sizing) for inspection on the next boot, and
+# CONFIG_PANIC_TIMEOUT=1 above then reboots almost immediately instead of
+# leaving the device hung for ~90 minutes.
+CONFIG_PM_DEBUG=y
+CONFIG_DPM_WATCHDOG=y
+CONFIG_DPM_WATCHDOG_TIMEOUT=20
 CONFIG_PPP_ASYNC=y
 CONFIG_PPP_BSDCOMP=y
 CONFIG_PPP_DEFLATE=y
@@ -653,4 +668,12 @@ CONFIG_XFRM_USER=y
 CONFIG_ZISOFS=y
 CONFIG_ZRAM_DEBUG=y
 CONFIG_ZRAM=y
+# ZRAM's own driver (drivers/block/zram/Kconfig) defaults to LZO, which is
+# what the earlier disabled zram attempts (75% and 25%, both caused video
+# stutter) actually ran with -- LZO's compression ratio is good but its
+# compress/decompress cost is high, competing with real-time video decode
+# on this weak dual-core SoC. Switch to MediaTek's own LZ4K compressor,
+# tuned for this chip family and much lighter on CPU per operation.
+CONFIG_ZRAM_LZ4K_COMPRESS=y
+CONFIG_ZRAM_DEFAULT_COMP_ALGORITHM="lz4k"
 CONFIG_ZSMALLOC=y
