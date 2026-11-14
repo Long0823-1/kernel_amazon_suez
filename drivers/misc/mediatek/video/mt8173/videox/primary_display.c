@@ -2581,6 +2581,19 @@ static int _fence_release_worker_thread(void *data)
 
 static struct task_struct *present_fence_release_worker_task;
 
+/*
+ * IF_VSYNC is stopped while the panel is powered down.  Wake the present
+ * fence worker at both power edges and tag those wakes so they cannot be
+ * mistaken for a real vblank or release a fence ahead of the first frame.
+ */
+static atomic_t present_fence_power_epoch = ATOMIC_INIT(0);
+
+static void primary_display_present_fence_power_transition(void)
+{
+	atomic_inc(&present_fence_power_epoch);
+	dpmgr_signal_event(pgc->dpmgr_handle, DISP_PATH_EVENT_IF_VSYNC);
+}
+
 static int _present_fence_release_worker_thread(void *data)
 {
 	int ret = 0;
@@ -2593,6 +2606,8 @@ static int _present_fence_release_worker_thread(void *data)
 	return 0;
 #endif
 	while (1) {
+		int power_epoch = atomic_read(&present_fence_power_epoch);
+
 		if (pgc->state == DISP_SLEPT)
 			ret = dpmgr_wait_event(pgc->dpmgr_handle, DISP_PATH_EVENT_IF_VSYNC);
 		else
@@ -2603,6 +2618,10 @@ static int _present_fence_release_worker_thread(void *data)
 			disp_sync_info *layer_info =
 			    _get_sync_info(MAKE_DISP_SESSION(DISP_SESSION_PRIMARY, 0),
 					   disp_sync_get_present_timeline_id());
+
+			if (power_epoch != atomic_read(&present_fence_power_epoch) ||
+			    pgc->state != DISP_ALIVE)
+				continue;
 			if (layer_info == NULL) {
 				DISPERR("_get_sync_info fail in present_fence_release thread\n");
 				continue;
@@ -3185,6 +3204,9 @@ int primary_display_suspend(void)
 		DISPCHECK("primary display path is already sleep, skip\n");
 		goto done;
 	}
+	/* Stop fence waits before the IF_VSYNC source is powered down. */
+	pgc->state = DISP_SLEPT;
+	primary_display_present_fence_power_transition();
 #ifdef MTK_DISP_IDLE_LP
 	_disp_primary_path_exit_idle(__func__, 0);
 #endif
@@ -3267,7 +3289,6 @@ int primary_display_suspend(void)
 
 	MMProfileLogEx(ddp_mmp_get_events()->primary_suspend, MMProfileFlagPulse, 0, 8);
 
-	pgc->state = DISP_SLEPT;
 done:
 	_primary_path_unlock(__func__);
 	disp_sw_mutex_unlock(&(pgc->capture_lock));
@@ -3323,6 +3344,7 @@ int primary_display_resume(void)
 		_cmdq_start_trigger_loop();
 		DISPCHECK("[POWER]start cmdq[end]--IPOH\n");
 		pgc->state = DISP_ALIVE;
+		primary_display_present_fence_power_transition();
 		goto done;
 	}
 	DISPCHECK("[POWER]dpmanager re-init[begin]\n");
@@ -3430,6 +3452,7 @@ int primary_display_resume(void)
 	DISPCHECK("[POWER]wakeup aal/od trigger process[end]\n");
 #endif
 	pgc->state = DISP_ALIVE;
+	primary_display_present_fence_power_transition();
 
 done:
 	_primary_path_unlock(__func__);
